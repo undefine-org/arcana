@@ -36,6 +36,7 @@ defmodule ArcanaWeb.AskLive do
        pipeline_step: nil,
        pipeline_steps: Map.new(@pipeline_step_keys, &{&1, false}),
        loop_live_history: [],
+       loop_phase: :idle,
        trace_history: []
      )}
   end
@@ -73,6 +74,7 @@ defmodule ArcanaWeb.AskLive do
       ask_error: nil,
       pipeline_step: nil,
       loop_live_history: [],
+      loop_phase: :idle,
       trace_history: []
     )
   end
@@ -141,6 +143,7 @@ defmodule ArcanaWeb.AskLive do
             ask_question: question,
             ask_context: nil,
             loop_live_history: [],
+            loop_phase: :idle,
             trace_history: []
           )
 
@@ -156,6 +159,7 @@ defmodule ArcanaWeb.AskLive do
        ask_error: nil,
        ask_question: "",
        loop_live_history: [],
+       loop_phase: :idle,
        trace_history: []
      )}
   end
@@ -197,9 +201,54 @@ defmodule ArcanaWeb.AskLive do
     {:noreply, assign(socket, pipeline_steps: steps)}
   end
 
-  defp ask_loading_label(:advanced, _step), do: "Generating answer..."
-  defp ask_loading_label(:loop, _step), do: "Running agent loop..."
-  defp ask_loading_label(:pipeline, step), do: step || "Running pipeline..."
+  defp ask_loading_label(:advanced, _step, _phase), do: "Generating answer..."
+
+  defp ask_loading_label(:loop, _step, :grounding),
+    do: "Grounding answer against retrieved chunks..."
+
+  defp ask_loading_label(:loop, _step, _phase), do: "Running agent loop..."
+  defp ask_loading_label(:pipeline, step, _phase), do: step || "Running pipeline..."
+
+  # Renders an answer as markdown via MDEx. MDEx is an optional dep
+  # (see mix.exs) because the dashboard itself is optional. When it's
+  # missing, fall back to a minimal plain-text-to-html that preserves
+  # paragraph + line breaks (double newlines → <p>, single newlines →
+  # <br>) instead of collapsing the whole answer into one wall of text.
+  #
+  # MDEx's `:sanitize` enables ammonia-based HTML sanitization so any
+  # raw HTML the LLM emits gets scrubbed (the LLM is untrusted input).
+  # The fallback path also escapes HTML so it's safe to render.
+  defp render_markdown_answer(text) when is_binary(text) do
+    trimmed = String.trim(text)
+
+    if Code.ensure_loaded?(MDEx) do
+      Phoenix.HTML.raw(MDEx.to_html!(trimmed, sanitize: []))
+    else
+      plain_text_to_html(trimmed)
+    end
+  end
+
+  defp render_markdown_answer(_), do: ""
+
+  defp plain_text_to_html(text) do
+    paragraphs =
+      text
+      |> String.split(~r/\n{2,}/)
+      |> Enum.map_join("", fn paragraph ->
+        body =
+          paragraph
+          |> String.split("\n")
+          |> Enum.map_join("<br>", fn line ->
+            line
+            |> Phoenix.HTML.html_escape()
+            |> Phoenix.HTML.safe_to_string()
+          end)
+
+        "<p>#{body}</p>"
+      end)
+
+    Phoenix.HTML.raw(paragraphs)
+  end
 
   # Resolves which LLM each role uses, mirroring the lookup chain inside
   # Arcana.Loop.run/2:
@@ -338,11 +387,22 @@ defmodule ArcanaWeb.AskLive do
       # Per-tool-call telemetry for the Loop sub-tab. Each event carries
       # the same shape as a tool_history entry, so the LV can render
       # the live trace incrementally as the loop unfolds.
-      :telemetry.attach(
+      :telemetry.attach_many(
         loop_handler_id,
-        [:arcana, :loop, :tool_call],
-        fn _event, _measurements, metadata, _config ->
-          send(parent, {:loop_progress, metadata})
+        [
+          [:arcana, :loop, :tool_call],
+          [:arcana, :loop, :ground, :start],
+          [:arcana, :loop, :ground, :stop]
+        ],
+        fn
+          [:arcana, :loop, :tool_call], _measurements, metadata, _config ->
+            send(parent, {:loop_progress, metadata})
+
+          [:arcana, :loop, :ground, :start], _measurements, _metadata, _config ->
+            send(parent, {:loop_phase, :grounding})
+
+          [:arcana, :loop, :ground, :stop], _measurements, _metadata, _config ->
+            send(parent, {:loop_phase, :idle})
         end,
         nil
       )
@@ -409,6 +469,10 @@ defmodule ArcanaWeb.AskLive do
     {:noreply, assign(socket, loop_live_history: socket.assigns.loop_live_history ++ [entry])}
   end
 
+  def handle_info({:loop_phase, phase}, socket) do
+    {:noreply, assign(socket, loop_phase: phase)}
+  end
+
   def handle_info({:trace_step_start, step}, socket) do
     entry = %{step: step, status: :running, duration_ms: nil, meta: nil}
 
@@ -470,17 +534,25 @@ defmodule ArcanaWeb.AskLive do
         _ -> 30
       end
 
+    controller_temperature = parse_temperature(params["controller_temperature"])
+    answer_temperature = parse_temperature(params["answer_temperature"])
+    fallback_temperature = parse_temperature(params["fallback_temperature"])
+
     run_ground? = params["use_ground_loop"] == "true"
 
     new_opts =
       [repo: repo]
       |> maybe_put_collection_opt(selected_collections)
 
-    run_opts = [
-      controller_llm: llm,
-      max_iterations: max_iterations,
-      chunk_cap: chunk_cap
-    ]
+    run_opts =
+      [
+        controller_llm: llm,
+        max_iterations: max_iterations,
+        chunk_cap: chunk_cap
+      ]
+      |> maybe_put(:controller_temperature, controller_temperature)
+      |> maybe_put(:answer_temperature, answer_temperature)
+      |> maybe_put(:fallback_temperature, fallback_temperature)
 
     ctx = Arcana.Loop.new(question, new_opts)
     runner = loop_runner()
@@ -491,6 +563,19 @@ defmodule ArcanaWeb.AskLive do
     end
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp parse_temperature(nil), do: nil
+  defp parse_temperature(""), do: nil
+
+  defp parse_temperature(str) when is_binary(str) do
+    case Float.parse(str) do
+      {t, _} when t >= 0 and t <= 2 -> t
+      _ -> nil
+    end
   end
 
   # Hook for tests to stub out Loop execution. Defaults to the real Loop.run/2.
@@ -742,8 +827,10 @@ defmodule ArcanaWeb.AskLive do
           <div class="arcana-ask-input">
             <textarea
               name="question"
+              id="ask-question"
               placeholder="Ask a question about your documents..."
               rows="3"
+              phx-hook="CmdEnterSubmit"
               disabled={@ask_running}
             ><%= @ask_question %></textarea>
 
@@ -926,6 +1013,19 @@ defmodule ArcanaWeb.AskLive do
                   <label>Controller LLM</label>
                   <small>Picks tools each turn.</small>
                   <div class="arcana-loop-setting-value"><%= llms.controller || "—" %></div>
+                  <div class="arcana-loop-setting-temp">
+                    <label for="controller_temperature">temp</label>
+                    <input
+                      type="number"
+                      name="controller_temperature"
+                      id="controller_temperature"
+                      value="0.1"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      disabled={@ask_running}
+                    />
+                  </div>
                 </div>
                 <div class="arcana-loop-setting arcana-loop-setting--info">
                   <label>Answer LLM</label>
@@ -937,11 +1037,39 @@ defmodule ArcanaWeb.AskLive do
                   <div class="arcana-loop-setting-value">
                     <%= llms.answer || "(uses controller)" %>
                   </div>
+                  <%= if llms.answer do %>
+                    <div class="arcana-loop-setting-temp">
+                      <label for="answer_temperature">temp</label>
+                      <input
+                        type="number"
+                        name="answer_temperature"
+                        id="answer_temperature"
+                        value="0.3"
+                        min="0"
+                        max="2"
+                        step="0.1"
+                        disabled={@ask_running}
+                      />
+                    </div>
+                  <% end %>
                 </div>
                 <div class="arcana-loop-setting arcana-loop-setting--info">
                   <label>Fallback synthesizer</label>
                   <small>Used when max_iterations hits with chunks but no answer call.</small>
                   <div class="arcana-loop-setting-value"><%= llms.fallback || "—" %></div>
+                  <div class="arcana-loop-setting-temp">
+                    <label for="fallback_temperature">temp</label>
+                    <input
+                      type="number"
+                      name="fallback_temperature"
+                      id="fallback_temperature"
+                      value="0.3"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      disabled={@ask_running}
+                    />
+                  </div>
                 </div>
                 <div class="arcana-loop-setting arcana-loop-setting--info">
                   <label>Tools (default set)</label>
@@ -1006,7 +1134,7 @@ defmodule ArcanaWeb.AskLive do
         <%= if @ask_running do %>
           <div class="arcana-ask-loading">
             <div class="arcana-spinner"></div>
-            <span><%= ask_loading_label(@ask_sub_tab, @pipeline_step) %></span>
+            <span><%= ask_loading_label(@ask_sub_tab, @pipeline_step, @loop_phase) %></span>
           </div>
 
           <%= if @ask_sub_tab == :loop do %>
@@ -1099,14 +1227,13 @@ defmodule ArcanaWeb.AskLive do
             <div class="arcana-ask-answer">
               <h3>Answer</h3>
               <div class="arcana-answer-content">
-                <%= if @ask_context.answer do %>
-                  <%= if Map.get(@ask_context, :grounding) do %>
+                <%= cond do %>
+                  <% is_nil(@ask_context.answer) -> %>
+                    <span style="color: #9ca3af; font-style: italic;">No answer generated</span>
+                  <% Map.get(@ask_context, :grounding) -> %>
                     <%= render_highlighted_answer(@ask_context.answer, @ask_context.grounding) %>
-                  <% else %>
-                    <%= @ask_context.answer %>
-                  <% end %>
-                <% else %>
-                  <span style="color: #9ca3af; font-style: italic;">No answer generated</span>
+                  <% true -> %>
+                    <%= render_markdown_answer(@ask_context.answer) %>
                 <% end %>
               </div>
             </div>

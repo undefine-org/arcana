@@ -18,7 +18,31 @@ defmodule ArcanaWeb.Assets do
   @live_view_js File.read!(live_view_js)
 
   @app_js """
-  let liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket)
+  // CmdEnterSubmit: when the user presses Cmd+Enter (or Ctrl+Enter on
+  // non-mac) inside the bound element (typically a textarea), find the
+  // closest form and submit it. Used by the Ask page so the user can
+  // submit a question without reaching for the mouse.
+  let Hooks = {
+    CmdEnterSubmit: {
+      mounted() {
+        this.handler = (e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault()
+            const form = this.el.closest("form")
+            if (form) {
+              form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}))
+            }
+          }
+        }
+        this.el.addEventListener("keydown", this.handler)
+      },
+      destroyed() {
+        this.el.removeEventListener("keydown", this.handler)
+      }
+    }
+  }
+
+  let liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {hooks: Hooks})
   liveSocket.connect()
   window.liveSocket = liveSocket
   """
@@ -1518,10 +1542,66 @@ defmodule ArcanaWeb.Assets do
     white-space: nowrap;
   }
 
-  /* Number-input cards are half-width so the two inputs sit side-by-side
-     in a row beneath the four info cards. */
+  /* Inline temperature row inside an LLM info card. The temperature is
+     visually attached to the LLM it controls so users can see at a
+     glance which model each setting affects. */
+  .arcana-loop-setting-temp {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px dashed #ddd6fe;
+  }
+
+  .arcana-loop-setting-temp label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 0;
+  }
+
+  .arcana-loop-setting-temp input[type="number"] {
+    width: 2.75rem;
+    margin: 0;
+    padding: 0.125rem 0.3125rem;
+    border: 1px solid #ddd6fe;
+    border-radius: 0.25rem;
+    font-size: 0.6875rem;
+    background: white;
+    color: #6d28d9;
+    box-sizing: border-box;
+    /* Hide the spin buttons in WebKit since the field is too narrow
+       for them to be useful and they consume horizontal space. */
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+
+  .arcana-loop-setting-temp input[type="number"]::-webkit-inner-spin-button,
+  .arcana-loop-setting-temp input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .arcana-loop-setting-temp input[type="number"]:focus {
+    outline: none;
+    border-color: #7c3aed;
+    box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.15);
+  }
+
+  .arcana-loop-setting-temp input[type="number"]:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  /* Number-input cards (max_iterations, chunk_cap) sit in two
+     compact columns beneath the four LLM info cards. The remaining
+     two columns of the row are visually balanced by the full-width
+     toggle below. */
   .arcana-loop-setting--number {
-    grid-column: span 2;
+    grid-column: span 1;
   }
 
   .arcana-loop-setting input[type="number"] {
@@ -2012,10 +2092,141 @@ defmodule ArcanaWeb.Assets do
   }
 
   .arcana-answer-content {
-    padding: 1rem;
+    padding: 1rem 1.25rem;
     font-size: 0.875rem;
     line-height: 1.6;
-    white-space: pre-wrap;
+    color: #1f2937;
+  }
+
+  /* Markdown elements inside a rendered answer. Earmark produces
+     standard HTML, so we style a minimal set: paragraphs, lists,
+     inline emphasis, inline code, and a few headers. */
+  .arcana-answer-content > :first-child {
+    margin-top: 0;
+  }
+
+  .arcana-answer-content > :last-child {
+    margin-bottom: 0;
+  }
+
+  .arcana-answer-content p {
+    margin: 0 0 0.75rem 0;
+  }
+
+  .arcana-answer-content ul,
+  .arcana-answer-content ol {
+    margin: 0 0 0.75rem 0;
+    padding-left: 1.5rem;
+  }
+
+  .arcana-answer-content li {
+    margin-bottom: 0.25rem;
+  }
+
+  .arcana-answer-content li > ul,
+  .arcana-answer-content li > ol {
+    margin-top: 0.25rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .arcana-answer-content strong {
+    font-weight: 600;
+    color: #111827;
+  }
+
+  .arcana-answer-content em {
+    font-style: italic;
+  }
+
+  .arcana-answer-content code {
+    background: #f3f4f6;
+    color: #7c3aed;
+    padding: 0.0625rem 0.375rem;
+    border-radius: 0.25rem;
+    font-size: 0.8125rem;
+    font-family:
+      ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  }
+
+  .arcana-answer-content pre {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+    overflow-x: auto;
+    margin: 0 0 0.75rem 0;
+  }
+
+  .arcana-answer-content pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+
+  .arcana-answer-content h1,
+  .arcana-answer-content h2,
+  .arcana-answer-content h3,
+  .arcana-answer-content h4,
+  .arcana-answer-content h5,
+  .arcana-answer-content h6 {
+    font-weight: 700;
+    color: #1f2937;
+    margin: 1.5rem 0 0.5rem 0;
+    line-height: 1.3;
+  }
+
+  /* First heading shouldn't push down — there's already padding above. */
+  .arcana-answer-content > :first-child:is(h1, h2, h3, h4, h5, h6) {
+    margin-top: 0;
+  }
+
+  .arcana-answer-content h1 {
+    font-size: 1.25rem;
+    color: #111827;
+    padding-bottom: 0.375rem;
+    border-bottom: 2px solid #ede9fe;
+  }
+
+  /* h2 is the most common section heading the LLM emits. Distinctive
+     but not loud: a left accent bar + a slightly bigger size + a touch
+     of color. */
+  .arcana-answer-content h2 {
+    font-size: 1.0625rem;
+    color: #6d28d9;
+    padding-left: 0.75rem;
+    border-left: 3px solid #7c3aed;
+  }
+
+  .arcana-answer-content h3 {
+    font-size: 0.9375rem;
+    color: #4b5563;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+
+  .arcana-answer-content h4,
+  .arcana-answer-content h5,
+  .arcana-answer-content h6 {
+    font-size: 0.875rem;
+    color: #4b5563;
+    font-weight: 600;
+  }
+
+  .arcana-answer-content blockquote {
+    border-left: 3px solid #c4b5fd;
+    padding-left: 0.875rem;
+    color: #4b5563;
+    margin: 0 0 0.75rem 0;
+  }
+
+  .arcana-answer-content a {
+    color: #7c3aed;
+    text-decoration: underline;
+  }
+
+  .arcana-answer-content a:hover {
+    color: #6d28d9;
   }
 
   .arcana-ask-section {

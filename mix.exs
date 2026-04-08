@@ -84,6 +84,7 @@ defmodule Arcana.MixProject do
       # Optional: Dashboard UI
       {:phoenix_live_view, "~> 1.0", optional: true},
       {:phoenix_html, "~> 4.1", optional: true},
+      {:mdex, "~> 0.12", optional: true},
       {:floki, "~> 0.36", only: :test},
       {:lazy_html, "~> 0.1.8", only: :test},
       {:phoenix_ecto, "~> 4.7", only: :test},
