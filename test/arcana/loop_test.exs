@@ -546,6 +546,11 @@ defmodule Arcana.LoopTest do
       assert_received {:synthesizer_called, _messages}
       assert ctx.terminated_by == :max_iterations
       assert ctx.answer == "TARDIS is the Doctor's time machine."
+
+      # The synthesis step is recorded in tool_history so the dashboard
+      # trace can surface it alongside the controller's tool calls.
+      assert %{tool: :synthesis, args: %{text: "TARDIS is the Doctor's time machine."}} =
+               List.last(ctx.tool_history)
     end
 
     test "synthesis is skipped when no chunks were accumulated" do

@@ -238,7 +238,8 @@ defmodule Arcana.Loop do
 
     * `:grounder` - Module implementing `Arcana.Grounder` or a
       3-arity function `(answer, chunks, opts) -> {:ok, result} | {:error, reason}`.
-      Defaults to `Arcana.Grounder.Hallmark`.
+      Defaults to `Arcana.Grounder.Hallmark`. Use `Arcana.Grounder.LLMJudge`
+      for LLM-as-judge faithfulness instead of NLI scoring.
 
   Any other options are passed through to the grounder, with `:question`
   added automatically from `ctx.question`.
@@ -389,8 +390,20 @@ defmodule Arcana.Loop do
         synth_opts = with_role_temperature(opts, :fallback)
 
         case synth_fn.(synthesis_messages, synth_opts) do
-          {:ok, text} -> %{ctx | answer: text, messages: synthesis_messages}
-          {:error, _reason} -> ctx
+          {:ok, text} ->
+            ctx
+            |> Map.put(:answer, text)
+            |> Map.put(:messages, synthesis_messages)
+            |> record_history(
+              :synthesis,
+              %{text: text},
+              ctx.iterations,
+              "Synthesized from #{length(ctx.chunks)} chunks",
+              %{}
+            )
+
+          {:error, _reason} ->
+            ctx
         end
     end
   end
@@ -581,6 +594,8 @@ defmodule Arcana.Loop do
 
     %{ctx | tool_history: new_history}
   end
+
+  defp safe_tool_atom(name) when is_atom(name), do: name
 
   defp safe_tool_atom(name) when is_binary(name) do
     String.to_existing_atom(name)
