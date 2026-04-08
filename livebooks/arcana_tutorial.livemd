@@ -890,6 +890,124 @@ Replace the default Hallmark grounder with your own logic:
 IO.puts("Grounding is pluggable: use Hallmark, a custom module, or an inline function")
 ```
 
+## 14. Loop (Agentic RAG)
+
+Pipeline is a deterministic composition: you decide the steps at call time and the context flows through them in order. `Arcana.Loop` is the opposite trade-off. You give the LLM a set of tools and let it decide which to call each turn, until it commits via `answer` or hits the iteration cap.
+
+The default toolset is three tools: `search` (the only one that touches the repo), `answer` (ends the loop with the final text), and `give_up` (ends with a failure signal).
+
+```elixir
+# In a real app:
+# {:ok, ctx} =
+#   Arcana.Loop.new("Which Time Lords have betrayed the Doctor?",
+#     repo: MyApp.Repo,
+#     collection: "doctor-who"
+#   )
+#   |> Arcana.Loop.run(controller_llm: "openai:gpt-4o-mini")
+#
+# ctx.answer           # the final text
+# ctx.tool_history     # list of tool calls in order
+# ctx.terminated_by    # :answered, :gave_up, :max_iterations, or :error
+
+IO.puts("Loop lets the LLM drive retrieval instead of hard-coding a pipeline")
+```
+
+### Collections: lock vs pick
+
+The `:collection` / `:collections` options shape what the controller can express. This is a guardrail for multi-tenant and multi-collection apps.
+
+- **Lock:** `Loop.new(q, collection: "docs")` removes the `collection` parameter from the tool schema entirely. The controller literally cannot search anything else.
+- **Pick:** `Loop.new(q, collections: ["docs", "wiki"])` adds an optional `collection` param the controller picks per call. The system prompt lists the allowed values.
+- **Unrestricted:** omit both. Searches across whatever the configured default is.
+
+### Live demo: scripted controller
+
+For the livebook we don't have a real LLM, so we'll drive the loop with a scripted controller that returns canned classified responses. This is the same technique `Arcana.Loop`'s own test suite uses.
+
+```elixir
+alias Arcana.Loop
+alias Arcana.Loop.{Context, Tools}
+
+# Inspect the tool schema the controller will see for a multi-collection setup.
+# Notice the `:collection` parameter that appears only because we passed a list.
+multi_tools = Tools.default(["docs", "wiki"])
+search_tool = Enum.find(multi_tools, &(&1.name == "search"))
+
+IO.puts("Multi-collection search tool params:")
+Enum.each(search_tool.parameter_schema, fn {name, opts} ->
+  IO.puts("  #{name}: #{inspect(opts[:type])}")
+end)
+
+# And the locked (single-collection) variant. No `:collection` param at all.
+locked_tools = Tools.default(["docs"])
+locked_search = Enum.find(locked_tools, &(&1.name == "search"))
+locked_params = Enum.map(locked_search.parameter_schema, &elem(&1, 0))
+
+IO.puts("\nLocked search tool params: #{inspect(locked_params)}")
+```
+
+```elixir
+# Scripted controller: call search, then answer.
+{:ok, script} =
+  Agent.start_link(fn ->
+    [
+      %{
+        type: :tool_calls,
+        text: "",
+        thinking: "",
+        tool_calls: [%{id: "c1", name: "search", arguments: %{"query" => "elixir"}}],
+        finish_reason: :tool_calls
+      },
+      %{
+        type: :tool_calls,
+        text: "",
+        thinking: "",
+        tool_calls: [
+          %{id: "c2", name: "answer", arguments: %{"text" => "Elixir runs on the BEAM."}}
+        ],
+        finish_reason: :tool_calls
+      }
+    ]
+  end)
+
+controller = fn _messages, _tools, _opts ->
+  next =
+    Agent.get_and_update(script, fn
+      [head | rest] -> {head, rest}
+      [] -> {nil, []}
+    end)
+
+  case next do
+    nil -> {:error, :script_exhausted}
+    classified -> {:ok, classified}
+  end
+end
+
+# Stub search_fn so the loop doesn't need a repo.
+search_fn = fn _query, _opts ->
+  {:ok,
+   [
+     %{id: "c1", text: "Elixir is a functional language that runs on the BEAM.", score: 0.9}
+   ]}
+end
+
+{:ok, ctx} =
+  Loop.new("what is elixir")
+  |> Loop.run(controller_llm: controller, search_fn: search_fn, max_iterations: 5)
+
+IO.puts("\n=== Loop result ===")
+IO.puts("terminated_by: #{inspect(ctx.terminated_by)}")
+IO.puts("iterations: #{ctx.iterations}")
+IO.puts("answer: #{ctx.answer}")
+IO.puts("\nTool history:")
+
+Enum.each(ctx.tool_history, fn entry ->
+  IO.puts("  [#{entry.iteration}] #{entry.tool} #{inspect(entry.args)}")
+end)
+```
+
+In a real app you'd pass a ReqLLM model string (e.g. `"openai:gpt-4o-mini"`) as the controller instead of a scripted function. The loop emits a `[:arcana, :loop, :tool_call]` telemetry event after each tool call, which is what drives the live trace in the Arcana dashboard.
+
 ## Summary
 
 | Concept | Description |
