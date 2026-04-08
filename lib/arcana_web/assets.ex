@@ -1440,33 +1440,38 @@ defmodule ArcanaWeb.Assets do
      visual language so the Loop sub-tab feels like part of the same
      surface as the Pipeline sub-tab. */
   .arcana-loop-settings {
-    margin-top: 1rem;
+    margin-top: 0.75rem;
   }
 
   .arcana-loop-settings h4 {
-    font-size: 0.75rem;
+    font-size: 0.6875rem;
     font-weight: 600;
     color: #6b7280;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    margin: 0 0 0.75rem 0;
+    margin: 0 0 0.5rem 0;
   }
 
+  /* Two-row layout: info cards (4-col) row, then number+toggle (2-col)
+     row. Both rows live inside the same grid so column widths align.
+     Info cards are horizontally compact; number inputs and the toggle
+     get their own tighter row beneath them. */
   .arcana-loop-settings-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.75rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
   }
 
   .arcana-loop-setting {
     display: flex;
     flex-direction: column;
-    padding: 0.875rem 1rem;
+    padding: 0.625rem 0.75rem;
     background: #fafafa;
     border: 1px solid #e5e7eb;
-    border-radius: 0.5rem;
-    gap: 0.25rem;
+    border-radius: 0.375rem;
+    gap: 0.125rem;
     transition: border-color 0.15s ease;
+    min-width: 0;
   }
 
   .arcana-loop-setting:hover {
@@ -1474,23 +1479,23 @@ defmodule ArcanaWeb.Assets do
   }
 
   .arcana-loop-setting label {
-    font-size: 0.8125rem;
+    font-size: 0.75rem;
     font-weight: 600;
     color: #374151;
   }
 
   .arcana-loop-setting > small {
-    font-size: 0.75rem;
+    font-size: 0.6875rem;
     color: #6b7280;
-    line-height: 1.4;
+    line-height: 1.35;
   }
 
   .arcana-loop-setting code {
-    font-size: 0.7rem;
+    font-size: 0.625rem;
     background: #ede9fe;
     color: #6d28d9;
-    padding: 0.0625rem 0.375rem;
-    border-radius: 0.25rem;
+    padding: 0.0625rem 0.3125rem;
+    border-radius: 0.1875rem;
   }
 
   .arcana-loop-setting--info {
@@ -1503,20 +1508,29 @@ defmodule ArcanaWeb.Assets do
   }
 
   .arcana-loop-setting-value {
-    margin-top: 0.375rem;
-    font-size: 0.75rem;
+    margin-top: 0.25rem;
+    font-size: 0.6875rem;
     color: #6d28d9;
     font-family:
       ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Number-input cards are half-width so the two inputs sit side-by-side
+     in a row beneath the four info cards. */
+  .arcana-loop-setting--number {
+    grid-column: span 2;
   }
 
   .arcana-loop-setting input[type="number"] {
-    margin-top: 0.5rem;
+    margin-top: 0.25rem;
     width: 100%;
-    padding: 0.5rem 0.75rem;
+    padding: 0.375rem 0.625rem;
     border: 1px solid #d1d5db;
-    border-radius: 0.375rem;
-    font-size: 0.875rem;
+    border-radius: 0.3125rem;
+    font-size: 0.8125rem;
     background: white;
     color: #111827;
     box-sizing: border-box;
@@ -1539,9 +1553,9 @@ defmodule ArcanaWeb.Assets do
   .arcana-loop-setting--toggle {
     grid-column: 1 / -1;
     flex-direction: row;
-    align-items: flex-start;
-    gap: 0.75rem;
-    padding: 0.875rem 1rem;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
     cursor: pointer;
   }
 
@@ -1555,9 +1569,9 @@ defmodule ArcanaWeb.Assets do
   }
 
   .arcana-loop-setting--toggle input[type="checkbox"] {
-    margin: 0.125rem 0 0 0;
-    width: 16px;
-    height: 16px;
+    margin: 0;
+    width: 15px;
+    height: 15px;
     accent-color: #7c3aed;
     cursor: pointer;
     flex-shrink: 0;
@@ -1565,20 +1579,23 @@ defmodule ArcanaWeb.Assets do
 
   .arcana-loop-toggle-content {
     display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    min-width: 0;
   }
 
   .arcana-loop-toggle-label {
-    font-size: 0.8125rem;
+    font-size: 0.75rem;
     font-weight: 600;
     color: #374151;
   }
 
   .arcana-loop-toggle-content small {
-    font-size: 0.75rem;
+    font-size: 0.6875rem;
     color: #6b7280;
-    line-height: 1.4;
+    line-height: 1.3;
   }
 
   /* Loop trace: shared visual language for both the live (during run)

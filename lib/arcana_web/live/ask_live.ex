@@ -498,9 +498,12 @@ defmodule ArcanaWeb.AskLive do
     Application.get_env(:arcana, :loop_runner) || (&Arcana.Loop.run/2)
   end
 
+  # Arcana.Loop.new/2 (and Arcana.search, Arcana.ask, Arcana.Pipeline.new)
+  # all normalize `:collection` and `:collections` to the same internal
+  # representation, so we can always pass the plural form and let the
+  # library sort it out.
   defp maybe_put_collection_opt(opts, []), do: opts
-  defp maybe_put_collection_opt(opts, [single]), do: Keyword.put(opts, :collection, single)
-  defp maybe_put_collection_opt(opts, multiple), do: Keyword.put(opts, :collections, multiple)
+  defp maybe_put_collection_opt(opts, list), do: Keyword.put(opts, :collections, list)
 
   defp format_loop_result(%Arcana.Loop.Context{} = ctx, question) do
     %{
@@ -524,14 +527,10 @@ defmodule ArcanaWeb.AskLive do
 
   defp run_advanced_ask(question, repo, llm, selected_collections, params) do
     graph = params["graph_search"] == "true"
-    opts = [repo: repo, llm: llm, graph: graph]
 
     opts =
-      case selected_collections do
-        [] -> opts
-        [single] -> Keyword.put(opts, :collection, single)
-        multiple -> Keyword.put(opts, :collections, multiple)
-      end
+      [repo: repo, llm: llm, graph: graph]
+      |> maybe_put_collection_opt(selected_collections)
 
     case Arcana.ask(question, opts) do
       {:ok, answer, results} ->
@@ -652,8 +651,7 @@ defmodule ArcanaWeb.AskLive do
   end
 
   defp add_collection_opts(opts, []), do: opts
-  defp add_collection_opts(opts, [single]), do: Keyword.put(opts, :collection, single)
-  defp add_collection_opts(opts, multiple), do: Keyword.put(opts, :collections, multiple)
+  defp add_collection_opts(opts, list), do: Keyword.put(opts, :collections, list)
 
   defp format_pipeline_result(%{error: error}, _question) when not is_nil(error) do
     {:error, error}
@@ -951,7 +949,7 @@ defmodule ArcanaWeb.AskLive do
                     <code>search</code> · <code>answer</code> · <code>give_up</code>
                   </small>
                 </div>
-                <div class="arcana-loop-setting">
+                <div class="arcana-loop-setting arcana-loop-setting--number">
                   <label for="max_iterations">Max iterations</label>
                   <small>Hard cap on controller turns.</small>
                   <input
@@ -964,7 +962,7 @@ defmodule ArcanaWeb.AskLive do
                     disabled={@ask_running}
                   />
                 </div>
-                <div class="arcana-loop-setting">
+                <div class="arcana-loop-setting arcana-loop-setting--number">
                   <label for="chunk_cap">Chunk cap</label>
                   <small>Max chunks accumulated across iterations.</small>
                   <input
