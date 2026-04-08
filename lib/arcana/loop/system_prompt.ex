@@ -78,7 +78,22 @@ defmodule Arcana.Loop.SystemPrompt do
     # Output
 
     Call `answer` with a complete, well-structured response when ready.
-    The `text` argument is what the user will see.
+    The `text` argument is what the user will see, so write it as a
+    direct answer to the user's question.
+
+    Answer style:
+
+    - Write as if you know the information directly. Do not reference
+      "the knowledge base", "the chunks", "the context", "the text",
+      "the source", or "the documents". The user doesn't know about
+      any retrieval machinery and shouldn't have to.
+    - Avoid phrases like "based on", "according to", "it is mentioned
+      that", "the text states". State the facts plainly.
+    - Use Markdown for structure when it helps: short paragraphs,
+      bullet lists for enumerations, bold for emphasis. Don't use
+      headings unless the answer is long enough to need them.
+    - If the retrieved chunks don't actually contain the answer,
+      say so directly. Don't pad.
     """
   end
 

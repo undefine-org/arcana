@@ -140,6 +140,27 @@ defmodule Arcana.Loop do
       Setting `:synthesizer` directly bypasses both. Note: this only affects
       the fallback path. The `answer` tool rewrite always uses `:answer_llm`
       directly when set, regardless of `:synthesizer`.
+    * `:answer_prompt` - Override the instruction text appended to the
+      conversation when `:answer_llm` rewrites the controller's draft
+      answer. String (literal text) or `(opts -> string)` function.
+      Use this to control answer style without replacing the whole
+      `:answer_llm`. Example:
+      `answer_prompt: "Write a one-paragraph summary. No bullet points."`
+    * `:synthesis_prompt` - Same as `:answer_prompt` but for the
+      `max_iterations` fallback synthesis path. The two paths take
+      separate options because the framing is different ("you ran out
+      of budget" vs "the controller committed").
+    * `:temperature` - Sampling temperature applied to all three LLM
+      call sites (controller, answer rewrite, fallback synthesis). When
+      omitted, the model's own default is used.
+    * `:controller_temperature` - Override `:temperature` for the
+      controller call only. Useful when you want a low temperature
+      (e.g. 0.0-0.2) for tool routing decisions but a higher one for
+      answer prose.
+    * `:answer_temperature` - Override `:temperature` for the
+      `:answer_llm` rewrite call only.
+    * `:fallback_temperature` - Override `:temperature` for the
+      fallback synthesis call only.
   """
   @spec run(Context.t(), keyword()) :: {:ok, Context.t()}
   def run(%Context{} = ctx, opts \\ []) do
@@ -364,9 +385,10 @@ defmodule Arcana.Loop do
           Keyword.get(opts, :synthesizer) ||
             default_synthesizer(answer_llm || controller_llm)
 
-        synthesis_messages = append_synthesis_request(ctx.messages)
+        synthesis_messages = append_synthesis_request(ctx.messages, opts)
+        synth_opts = with_role_temperature(opts, :fallback)
 
-        case synth_fn.(synthesis_messages, opts) do
+        case synth_fn.(synthesis_messages, synth_opts) do
           {:ok, text} -> %{ctx | answer: text, messages: synthesis_messages}
           {:error, _reason} -> ctx
         end
@@ -383,13 +405,40 @@ defmodule Arcana.Loop do
     end
   end
 
-  defp append_synthesis_request(messages) do
-    instruction =
-      "You have run out of search budget. Synthesize the best answer you can " <>
-        "from the chunks gathered above. Return the answer as plain text, no tool calls."
+  @default_synthesis_prompt "You have run out of search budget. Write the best answer you can from " <>
+                              "the information you already have. Return plain Markdown, no tool calls. " <>
+                              "Write as if you know the information directly — do not reference the " <>
+                              "knowledge base, the chunks, the context, or the source material. " <>
+                              "Avoid phrases like \"based on the context\" or \"according to the text\"."
 
+  defp append_synthesis_request(messages, opts) do
+    instruction = resolve_prompt(opts[:synthesis_prompt], @default_synthesis_prompt, opts)
     ReqLLM.Context.append(messages, ReqLLM.Context.user(instruction))
   end
+
+  # Per-role temperature resolution. The role-specific override
+  # (controller_temperature / answer_temperature / fallback_temperature)
+  # wins, then the global :temperature, then the model's own default
+  # (which means we don't pass :temperature at all).
+  defp with_role_temperature(opts, role) do
+    case Keyword.get(opts, role_temperature_key(role)) ||
+           Keyword.get(opts, :temperature) do
+      nil -> Keyword.delete(opts, :temperature)
+      temp -> Keyword.put(opts, :temperature, temp)
+    end
+  end
+
+  defp role_temperature_key(:controller), do: :controller_temperature
+  defp role_temperature_key(:answer), do: :answer_temperature
+  defp role_temperature_key(:fallback), do: :fallback_temperature
+
+  # Allows :answer_prompt and :synthesis_prompt to be either a literal
+  # string or a function. Functions get the merged opts so they can
+  # compose based on context (e.g. inspect ctx.collections).
+  defp resolve_prompt(nil, default, _opts), do: default
+  defp resolve_prompt(text, _default, _opts) when is_binary(text), do: text
+  defp resolve_prompt(fun, _default, opts) when is_function(fun, 1), do: fun.(opts)
+  defp resolve_prompt(fun, _default, _opts) when is_function(fun, 0), do: fun.()
 
   defp loop(%Context{iterations: i} = ctx, _tools, _llm, _answer_llm, max, _opts) when i >= max do
     {:ok, %{ctx | terminated_by: :max_iterations}}
@@ -397,8 +446,9 @@ defmodule Arcana.Loop do
 
   defp loop(%Context{} = ctx, tools, llm, answer_llm, max, opts) do
     iteration = ctx.iterations
+    controller_opts = with_role_temperature(opts, :controller)
 
-    case call_controller(llm, ctx.messages, tools, opts) do
+    case call_controller(llm, ctx.messages, tools, controller_opts) do
       {:ok, %{type: :final_answer, text: text}} ->
         {:ok,
          %{
@@ -480,20 +530,23 @@ defmodule Arcana.Loop do
   defp maybe_rewrite_with_answerer(_ctx, draft, :gave_up, _answer_llm, _opts), do: draft
 
   defp maybe_rewrite_with_answerer(ctx, draft, :answered, answer_llm, opts) do
-    rewrite_messages = append_answer_request(ctx.messages)
+    rewrite_messages = append_answer_request(ctx.messages, opts)
+    answer_opts = with_role_temperature(opts, :answer)
 
-    case call_controller(answer_llm, rewrite_messages, [], opts) do
+    case call_controller(answer_llm, rewrite_messages, [], answer_opts) do
       {:ok, %{text: text}} when is_binary(text) and text != "" -> text
       _ -> draft
     end
   end
 
-  defp append_answer_request(messages) do
-    instruction =
-      "The research is complete. Based on the chunks gathered above, write the " <>
-        "final user-facing answer to the original question. Return plain text only, " <>
-        "no tool calls."
+  @default_answer_prompt "The research is complete. Write the final user-facing answer to the " <>
+                           "original question. Return plain Markdown, no tool calls. Write as if " <>
+                           "you know the information directly — do not reference the knowledge " <>
+                           "base, the chunks, the context, or the source material. Avoid phrases " <>
+                           "like \"based on the context\" or \"according to the text\"."
 
+  defp append_answer_request(messages, opts) do
+    instruction = resolve_prompt(opts[:answer_prompt], @default_answer_prompt, opts)
     ReqLLM.Context.append(messages, ReqLLM.Context.user(instruction))
   end
 
