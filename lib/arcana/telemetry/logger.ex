@@ -74,6 +74,7 @@ defmodule Arcana.Telemetry.Logger do
     [:arcana, :pipeline, :rerank, :stop],
     [:arcana, :pipeline, :answer, :stop],
     [:arcana, :pipeline, :self_correct, :stop],
+    [:arcana, :pipeline, :ground, :stop],
     # GraphRAG operations
     [:arcana, :graph, :build, :stop],
     [:arcana, :graph, :search, :stop],

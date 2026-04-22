@@ -3,15 +3,32 @@ defmodule Arcana.Grounding.HallmarkServing do
   Lazy-loaded NLI serving for hallucination detection via Hallmark.
 
   Uses Hallmark (Vectara HHEM model via Bumblebee) to score each sentence
-  in the answer against the combined context. Sentences scoring below the
-  threshold are marked as hallucinated.
+  in the answer against the retrieved chunks. Runs one NLI pair per
+  (sentence, chunk) and takes the max score per sentence as the final
+  faithfulness score. Sentences scoring below the threshold are marked
+  as hallucinated.
+
+  ## Why per-chunk instead of concat-all
+
+  HHEM's ModernBERT has a fixed input window. Concatenating all chunks
+  into one context works for small chunk sets (Advanced RAG's 5-10
+  chunks) but silently truncates once the pipeline starts accumulating
+  more (Pipeline with decompose + rerank hits 20+ easily). Truncation
+  drops the tail chunks from the context the NLI sees, so sentences
+  whose evidence lived in those tail chunks get flagged as
+  hallucinations even when the chunks were retrieved correctly.
+
+  Per-chunk scoring sidesteps truncation entirely. Each chunk fits
+  comfortably on its own, and `Hallmark.score_batch/2` sends the whole
+  (sentence × chunk) grid through the NLI model as one batched forward
+  pass, so the wall-clock cost stays reasonable.
 
   The model is downloaded automatically on first use via Bumblebee.
   """
 
   use GenServer
 
-  alias Arcana.Grounding.{Attribution, InputFormatter, Result}
+  alias Arcana.Grounding.{Attribution, Result}
 
   @default_threshold 0.5
 
@@ -102,17 +119,51 @@ defmodule Arcana.Grounding.HallmarkServing do
     end)
   end
 
-  defp do_inference(state, question, chunks, answer, opts) do
+  # Hard cap on pairs per score_batch call to stay under Metal/EMLX's
+  # per-buffer allocation limit. Doctor-who chunks run 500-1500 chars
+  # each, so even 32 pairs can push past 14GB GPU buffer on Apple
+  # Silicon. 8 is conservative but reliable; the NLI forward pass per
+  # sub-batch is still vectorized across its pairs, so throughput stays
+  # reasonable (for 120 pairs that's 15 forward passes, each ~150ms).
+  @max_pairs_per_call 8
+
+  defp do_inference(state, _question, chunks, answer, opts) do
     %{model: model} = state
     threshold = Keyword.get(opts, :threshold, @default_threshold)
-    context = InputFormatter.format(question, chunks)
 
     sentences = split_sentences(answer)
-    pairs = Enum.map(sentences, fn {text, _start, _end} -> {context, text} end)
+    chunk_texts = Enum.map(chunks, &chunk_text/1)
 
-    {:ok, scores} = Hallmark.score_batch(model, pairs)
+    scored_sentences =
+      case chunk_texts do
+        [] ->
+          # No chunks to score against: every sentence is unsupported.
+          Enum.map(sentences, &{&1, 0.0})
 
-    scored_sentences = Enum.zip(sentences, scores)
+        _ ->
+          # Full (sentence, chunk) grid as NLI pairs, chunked into
+          # sub-batches that fit in one forward pass.
+          pairs =
+            for {sentence_text, _, _} <- sentences,
+                chunk_text <- chunk_texts do
+              {chunk_text, sentence_text}
+            end
+
+          flat_scores = batched_score(model, pairs)
+
+          # Reassemble: the flat list is sentences × chunks, in that
+          # order. Group by chunk count and take max per sentence.
+          chunks_per_sentence = length(chunk_texts)
+
+          sentence_score_groups =
+            Enum.chunk_every(flat_scores, chunks_per_sentence)
+
+          sentences
+          |> Enum.zip(sentence_score_groups)
+          |> Enum.map(fn {sentence, scores} ->
+            {sentence, Enum.max(scores, fn -> 0.0 end)}
+          end)
+      end
 
     hallucinated_spans =
       scored_sentences
@@ -149,6 +200,19 @@ defmodule Arcana.Grounding.HallmarkServing do
        faithful_spans: faithful_spans,
        token_labels: nil
      }}
+  end
+
+  defp chunk_text(%{text: text}) when is_binary(text), do: text
+  defp chunk_text(%{"text" => text}) when is_binary(text), do: text
+  defp chunk_text(_), do: ""
+
+  defp batched_score(model, pairs) do
+    pairs
+    |> Enum.chunk_every(@max_pairs_per_call)
+    |> Enum.flat_map(fn batch ->
+      {:ok, scores} = Hallmark.score_batch(model, batch)
+      scores
+    end)
   end
 
   @doc false
