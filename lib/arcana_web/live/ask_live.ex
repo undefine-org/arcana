@@ -16,6 +16,15 @@ defmodule ArcanaWeb.AskLive do
   # rather than reaching into the DOM with inline JS.
   @pipeline_step_keys ~w(use_gate use_rewrite use_expand use_decompose use_reason self_correct use_rerank use_ground)
 
+  # Groups the pipeline steps into the three phases of the Singh taxonomy's
+  # Modular RAG: query preparation, retrieval, and answer. Used by the
+  # per-phase "all / none" toggles on the Pipeline UI.
+  @pipeline_step_groups %{
+    "query" => ~w(use_gate use_rewrite use_expand use_decompose),
+    "retrieval" => ~w(use_reason use_rerank),
+    "answer" => ~w(self_correct use_ground)
+  }
+
   @impl true
   def mount(_params, session, socket) do
     repo = get_repo_from_session(session)
@@ -197,9 +206,20 @@ defmodule ArcanaWeb.AskLive do
     {:noreply, assign(socket, llm_select: !socket.assigns.llm_select)}
   end
 
-  def handle_event("set_pipeline_steps", %{"value" => value}, socket) do
-    enabled? = value == "all"
-    steps = Map.new(@pipeline_step_keys, &{&1, enabled?})
+  def handle_event("set_pipeline_steps", %{"mode" => mode} = params, socket) do
+    enabled? = mode == "all"
+
+    keys =
+      case Map.get(params, "group") do
+        nil -> @pipeline_step_keys
+        group -> Map.get(@pipeline_step_groups, group, [])
+      end
+
+    steps =
+      Enum.reduce(keys, socket.assigns.pipeline_steps, fn key, acc ->
+        Map.put(acc, key, enabled?)
+      end)
+
     {:noreply, assign(socket, pipeline_steps: steps)}
   end
 
@@ -733,7 +753,15 @@ defmodule ArcanaWeb.AskLive do
   end
 
   defp maybe_rerank(ctx, opts) do
-    if Keyword.get(opts, :use_rerank, false), do: Arcana.Pipeline.rerank(ctx), else: ctx
+    # Use the local CrossEncoder reranker for the dashboard: it reorders
+    # without filtering, which matches the UI copy ("Cross-encoder
+    # rescoring") and avoids the LLM reranker's aggressive threshold that
+    # can drop every chunk on the demo questions.
+    if Keyword.get(opts, :use_rerank, false) do
+      Arcana.Pipeline.rerank(ctx, reranker: Arcana.Reranker.CrossEncoder)
+    else
+      ctx
+    end
   end
 
   defp maybe_answer_with_hallucinations(ctx, opts) do
@@ -801,8 +829,15 @@ defmodule ArcanaWeb.AskLive do
        question: question,
        answer: ctx.answer,
        results: all_chunks,
+       rewritten_query: ctx.rewritten_query,
        expanded_query: ctx.expanded_query,
        sub_questions: ctx.sub_questions,
+       skip_retrieval: ctx.skip_retrieval,
+       gate_reasoning: ctx.gate_reasoning,
+       reason_iterations: ctx.reason_iterations,
+       queries_tried: ctx.queries_tried,
+       correction_count: ctx.correction_count,
+       corrections: ctx.corrections,
        selected_collections: ctx.collections,
        grounding: ctx.grounding
      }}
@@ -939,112 +974,156 @@ defmodule ArcanaWeb.AskLive do
                     type="button"
                     class="arcana-pipeline-toggle-link"
                     phx-click="set_pipeline_steps"
-                    phx-value-value="all"
+                    phx-value-mode="all"
                   >all</button>
                   /
                   <button
                     type="button"
                     class="arcana-pipeline-toggle-link"
                     phx-click="set_pipeline_steps"
-                    phx-value-value="none"
+                    phx-value-mode="none"
                   >none</button>
                 </span>
               </h4>
-              <ol class="arcana-pipeline">
-                <li>
-                  <label class="arcana-pipeline-step">
-                    <input type="checkbox" name="use_gate" value="true" checked={@pipeline_steps["use_gate"]} disabled={@ask_running} />
-                    <span class="arcana-step-label">Gate</span>
-                    <small>Skip retrieval if the LLM can answer from general knowledge</small>
-                  </label>
-                </li>
-                <li>
-                  <label class="arcana-pipeline-step">
-                    <input type="checkbox" name="use_rewrite" value="true" checked={@pipeline_steps["use_rewrite"]} disabled={@ask_running} />
-                    <span class="arcana-step-label">Query Rewriting</span>
-                    <small>Clean up conversational input before search</small>
-                  </label>
-                </li>
-                <li>
-                  <label class="arcana-pipeline-step">
-                    <input type="checkbox" name="use_expand" value="true" checked={@pipeline_steps["use_expand"]} disabled={@ask_running} />
-                    <span class="arcana-step-label">Query Expansion</span>
-                    <small>Generate related queries</small>
-                  </label>
-                </li>
-                <li>
-                  <label class="arcana-pipeline-step">
-                    <input type="checkbox" name="use_decompose" value="true" checked={@pipeline_steps["use_decompose"]} disabled={@ask_running} />
-                    <span class="arcana-step-label">Decomposition</span>
-                    <small>Break into sub-questions</small>
-                  </label>
-                </li>
-                <li>
-                  <%= if selected_graph_enabled?(@collections, @selected_collections) do %>
-                    <div class="arcana-pipeline-fork">
+              <div class="arcana-pipeline-phases">
+                <section class="arcana-pipeline-phase">
+                  <header class="arcana-pipeline-phase-header">
+                    <h5>Query preparation</h5>
+                    <span class="arcana-pipeline-phase-toggle">
+                      <button type="button" class="arcana-pipeline-toggle-link"
+                        phx-click="set_pipeline_steps" phx-value-mode="all" phx-value-group="query">all</button>
+                      /
+                      <button type="button" class="arcana-pipeline-toggle-link"
+                        phx-click="set_pipeline_steps" phx-value-mode="none" phx-value-group="query">none</button>
+                    </span>
+                  </header>
+                  <ol class="arcana-pipeline">
+                    <li>
                       <label class="arcana-pipeline-step">
-                        <input type="radio" name="graph_search" value="false" disabled={@ask_running} />
-                        <span class="arcana-step-label">Search</span>
-                        <small>Retrieve relevant chunks</small>
+                        <input type="checkbox" name="use_gate" value="true" checked={@pipeline_steps["use_gate"]} disabled={@ask_running} />
+                        <span class="arcana-step-label">Gate</span>
+                        <small>Skip retrieval if the LLM can answer from general knowledge</small>
                       </label>
-                      <span class="arcana-fork-or">or</span>
+                    </li>
+                    <li>
                       <label class="arcana-pipeline-step">
-                        <input type="radio" name="graph_search" value="true" checked disabled={@ask_running} />
-                        <span class="arcana-step-label">Graph-Assisted Search</span>
-                        <small>Find results through entity relationships</small>
+                        <input type="checkbox" name="use_rewrite" value="true" checked={@pipeline_steps["use_rewrite"]} disabled={@ask_running} />
+                        <span class="arcana-step-label">Query Rewriting</span>
+                        <small>Clean up conversational input before search</small>
                       </label>
-                    </div>
-                  <% else %>
-                    <div class="arcana-pipeline-step fixed">
-                      <span class="arcana-step-label">Search</span>
-                      <small>Retrieve relevant chunks</small>
-                    </div>
-                  <% end %>
-                </li>
-                <li>
-                  <label class="arcana-pipeline-step">
-                    <input type="checkbox" name="use_reason" value="true" checked={@pipeline_steps["use_reason"]} disabled={@ask_running} />
-                    <span class="arcana-step-label">Multi-hop Reasoning</span>
-                    <small>Search again if results are insufficient</small>
-                  </label>
-                </li>
-                <li>
-                  <label class="arcana-pipeline-step">
-                    <input type="checkbox" name="self_correct" value="true" checked={@pipeline_steps["self_correct"]} disabled={@ask_running} />
-                    <span class="arcana-step-label">Self-Correction</span>
-                    <small>Refine search if results are poor</small>
-                  </label>
-                </li>
-                <li>
-                  <label class="arcana-pipeline-step">
-                    <input type="checkbox" name="use_rerank" value="true" checked={@pipeline_steps["use_rerank"]} disabled={@ask_running} />
-                    <span class="arcana-step-label">Reranking</span>
-                    <small>Cross-encoder or LLM-based result reranking</small>
-                  </label>
-                </li>
-                <li>
-                  <div class="arcana-pipeline-fork">
-                    <label class="arcana-pipeline-step">
-                      <input type="radio" name="answer_mode" value="normal" checked disabled={@ask_running} />
-                      <span class="arcana-step-label">Answer</span>
-                      <small>Generate faithful answer</small>
-                    </label>
-                    <span class="arcana-fork-or">or</span>
-                    <label class="arcana-pipeline-step">
-                      <input type="radio" name="answer_mode" value="hallucinate" disabled={@ask_running} />
-                      <span class="arcana-step-label">Answer with Hallucination</span>
-                      <small>Mix in fake facts to showcase grounding</small>
-                    </label>
-                  </div>
-                </li>
-                <li>
-                  <label class="arcana-pipeline-step">
-                    <input type="checkbox" name="use_ground" value="true" checked={@pipeline_steps["use_ground"]} disabled={@ask_running} />
-                    <span class="arcana-step-label">Grounding</span>
-                    <small>Detect hallucinated vs faithful spans</small>
-                  </label>
-                </li>
-              </ol>
+                    </li>
+                    <li>
+                      <label class="arcana-pipeline-step">
+                        <input type="checkbox" name="use_expand" value="true" checked={@pipeline_steps["use_expand"]} disabled={@ask_running} />
+                        <span class="arcana-step-label">Query Expansion</span>
+                        <small>Generate related queries</small>
+                      </label>
+                    </li>
+                    <li>
+                      <label class="arcana-pipeline-step">
+                        <input type="checkbox" name="use_decompose" value="true" checked={@pipeline_steps["use_decompose"]} disabled={@ask_running} />
+                        <span class="arcana-step-label">Decomposition</span>
+                        <small>Break into sub-questions</small>
+                      </label>
+                    </li>
+                  </ol>
+                </section>
+
+                <section class="arcana-pipeline-phase">
+                  <header class="arcana-pipeline-phase-header">
+                    <h5>Retrieval</h5>
+                    <span class="arcana-pipeline-phase-toggle">
+                      <button type="button" class="arcana-pipeline-toggle-link"
+                        phx-click="set_pipeline_steps" phx-value-mode="all" phx-value-group="retrieval">all</button>
+                      /
+                      <button type="button" class="arcana-pipeline-toggle-link"
+                        phx-click="set_pipeline_steps" phx-value-mode="none" phx-value-group="retrieval">none</button>
+                    </span>
+                  </header>
+                  <ol class="arcana-pipeline">
+                    <li>
+                      <%= if selected_graph_enabled?(@collections, @selected_collections) do %>
+                        <div class="arcana-pipeline-fork">
+                          <label class="arcana-pipeline-step">
+                            <input type="radio" name="graph_search" value="false" disabled={@ask_running} />
+                            <span class="arcana-step-label">Search</span>
+                            <small>Retrieve relevant chunks</small>
+                          </label>
+                          <span class="arcana-fork-or">or</span>
+                          <label class="arcana-pipeline-step">
+                            <input type="radio" name="graph_search" value="true" checked disabled={@ask_running} />
+                            <span class="arcana-step-label">Graph-Assisted Search</span>
+                            <small>Find results through entity relationships</small>
+                          </label>
+                        </div>
+                      <% else %>
+                        <div class="arcana-pipeline-step fixed">
+                          <span class="arcana-step-label">Search</span>
+                          <small>Retrieve relevant chunks</small>
+                        </div>
+                      <% end %>
+                    </li>
+                    <li class="arcana-pipeline-substep">
+                      <label class="arcana-pipeline-step">
+                        <input type="checkbox" name="use_reason" value="true" checked={@pipeline_steps["use_reason"]} disabled={@ask_running} />
+                        <span class="arcana-step-label"><span class="arcana-loop-glyph">↻</span>Multi-hop Reasoning</span>
+                        <small>Loops search with a follow-up query when chunks are thin</small>
+                      </label>
+                    </li>
+                    <li>
+                      <label class="arcana-pipeline-step">
+                        <input type="checkbox" name="use_rerank" value="true" checked={@pipeline_steps["use_rerank"]} disabled={@ask_running} />
+                        <span class="arcana-step-label">Reranking</span>
+                        <small>Cross-encoder rescoring of retrieved chunks</small>
+                      </label>
+                    </li>
+                  </ol>
+                </section>
+
+                <section class="arcana-pipeline-phase">
+                  <header class="arcana-pipeline-phase-header">
+                    <h5>Answer</h5>
+                    <span class="arcana-pipeline-phase-toggle">
+                      <button type="button" class="arcana-pipeline-toggle-link"
+                        phx-click="set_pipeline_steps" phx-value-mode="all" phx-value-group="answer">all</button>
+                      /
+                      <button type="button" class="arcana-pipeline-toggle-link"
+                        phx-click="set_pipeline_steps" phx-value-mode="none" phx-value-group="answer">none</button>
+                    </span>
+                  </header>
+                  <ol class="arcana-pipeline">
+                    <li>
+                      <div class="arcana-pipeline-fork">
+                        <label class="arcana-pipeline-step">
+                          <input type="radio" name="answer_mode" value="normal" checked disabled={@ask_running} />
+                          <span class="arcana-step-label">Answer</span>
+                          <small>Generate faithful answer</small>
+                        </label>
+                        <span class="arcana-fork-or">or</span>
+                        <label class="arcana-pipeline-step">
+                          <input type="radio" name="answer_mode" value="hallucinate" disabled={@ask_running} />
+                          <span class="arcana-step-label">Answer with Hallucination</span>
+                          <small>Mix in fake facts to showcase grounding</small>
+                        </label>
+                      </div>
+                    </li>
+                    <li class="arcana-pipeline-substep">
+                      <label class="arcana-pipeline-step">
+                        <input type="checkbox" name="self_correct" value="true" checked={@pipeline_steps["self_correct"]} disabled={@ask_running} />
+                        <span class="arcana-step-label"><span class="arcana-loop-glyph">↻</span>Self-Correction</span>
+                        <small>Regenerate the answer if it isn't grounded in the chunks</small>
+                      </label>
+                    </li>
+                    <li>
+                      <label class="arcana-pipeline-step">
+                        <input type="checkbox" name="use_ground" value="true" checked={@pipeline_steps["use_ground"]} disabled={@ask_running} />
+                        <span class="arcana-step-label">Grounding</span>
+                        <small>Detect hallucinated vs faithful spans</small>
+                      </label>
+                    </li>
+                  </ol>
+                </section>
+              </div>
             </div>
           <% end %>
 
@@ -1352,22 +1431,78 @@ defmodule ArcanaWeb.AskLive do
               </div>
             <% end %>
 
-            <%= if Map.get(@ask_context, :expanded_query) do %>
-              <div class="arcana-ask-section">
-                <h4>Expanded Query</h4>
-                <p class="arcana-expanded-query"><%= @ask_context.expanded_query %></p>
-              </div>
-            <% end %>
-
-            <% sub_qs = Map.get(@ask_context, :sub_questions) %>
-            <%= if sub_qs && length(sub_qs) > 0 do %>
-              <div class="arcana-ask-section">
-                <h4>Sub-Questions</h4>
-                <ul class="arcana-query-list">
-                  <%= for sq <- sub_qs do %>
-                    <li><%= sq %></li>
+            <%= if pipeline_internals?(@ask_context) do %>
+              <div class="arcana-ask-section arcana-pipeline-internals">
+                <h4>Pipeline internals</h4>
+                <dl class="arcana-pipeline-internals-list">
+                  <%= if rq = Map.get(@ask_context, :rewritten_query) do %>
+                    <dt>Rewritten query</dt>
+                    <dd class="arcana-pipeline-internals-quote">"<%= rq %>"</dd>
                   <% end %>
-                </ul>
+
+                  <%= case Map.get(@ask_context, :skip_retrieval) do %>
+                    <% nil -> %>
+                    <% skip -> %>
+                      <dt>Gate decision</dt>
+                      <dd>
+                        <span class={"arcana-pipeline-internals-badge #{if skip, do: "skip", else: "retrieve"}"}>
+                          <%= if skip, do: "skip retrieval", else: "retrieve" %>
+                        </span>
+                        <%= if reasoning = Map.get(@ask_context, :gate_reasoning) do %>
+                          <span class="arcana-pipeline-internals-reasoning"><%= reasoning %></span>
+                        <% end %>
+                      </dd>
+                  <% end %>
+
+                  <%= if eq = Map.get(@ask_context, :expanded_query) do %>
+                    <dt>Expanded query</dt>
+                    <dd class="arcana-pipeline-internals-quote">"<%= eq %>"</dd>
+                  <% end %>
+
+                  <% sub_qs = Map.get(@ask_context, :sub_questions) %>
+                  <%= if sub_qs && length(sub_qs) > 0 do %>
+                    <dt>Sub-questions (<%= length(sub_qs) %>)</dt>
+                    <dd>
+                      <ul class="arcana-query-list">
+                        <%= for sq <- sub_qs do %>
+                          <li><%= sq %></li>
+                        <% end %>
+                      </ul>
+                    </dd>
+                  <% end %>
+
+                  <%= case Map.get(@ask_context, :reason_iterations) do %>
+                    <% nil -> %>
+                    <% 0 -> %>
+                      <dt>Multi-hop reasoning</dt>
+                      <dd>
+                        <span class="arcana-pipeline-internals-badge neutral">chunks sufficient, no follow-up</span>
+                      </dd>
+                    <% n -> %>
+                      <dt>Multi-hop reasoning (<%= n %> follow-ups)</dt>
+                      <dd>
+                        <% tried = Map.get(@ask_context, :queries_tried) || MapSet.new() %>
+                        <ul class="arcana-query-list">
+                          <%= for q <- MapSet.to_list(tried) do %>
+                            <li>"<%= q %>"</li>
+                          <% end %>
+                        </ul>
+                      </dd>
+                  <% end %>
+
+                  <%= case Map.get(@ask_context, :correction_count) do %>
+                    <% nil -> %>
+                    <% 0 -> %>
+                    <% n -> %>
+                      <dt>Self-correction (<%= n %> <%= if n == 1, do: "retry", else: "retries" %>)</dt>
+                      <dd>
+                        <% corrs = Map.get(@ask_context, :corrections) || [] %>
+                        <%= for {_prev, feedback} <- corrs do %>
+                          <div class="arcana-pipeline-internals-feedback"><%= feedback %></div>
+                        <% end %>
+                      </dd>
+                  <% end %>
+                </dl>
               </div>
             <% end %>
 
@@ -1581,6 +1716,20 @@ defmodule ArcanaWeb.AskLive do
   defp pipeline_step_label(:answer), do: "Generating answer..."
   defp pipeline_step_label(:ground), do: "Checking for hallucinations..."
   defp pipeline_step_label(_), do: nil
+
+  # True when at least one pipeline step wrote an inspectable output to
+  # the ask_context. Keeps the "Pipeline internals" section from showing
+  # an empty shell on Advanced runs that don't touch these fields.
+  defp pipeline_internals?(%{} = ctx) do
+    not is_nil(Map.get(ctx, :rewritten_query)) or
+      not is_nil(Map.get(ctx, :expanded_query)) or
+      not is_nil(Map.get(ctx, :skip_retrieval)) or
+      not is_nil(Map.get(ctx, :reason_iterations)) or
+      (Map.get(ctx, :correction_count) || 0) > 0 or
+      match?([_ | _], Map.get(ctx, :sub_questions))
+  end
+
+  defp pipeline_internals?(_), do: false
 
   # Short labels for the trace tool badge. Covers both Pipeline step
   # names and the top-level events that fire during an Advanced run

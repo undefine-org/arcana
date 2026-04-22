@@ -1598,6 +1598,68 @@ defmodule ArcanaWeb.Assets do
     cursor: not-allowed;
   }
 
+  /* Phase grouping: wraps the flat pipeline into three labeled sections
+     (Query preparation, Retrieval, Answer) with a thin divider line
+     between them. Each phase keeps its own vertical flow; the dividers
+     make the three stages visible without losing the single-column shape. */
+  .arcana-pipeline-phases {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+  }
+
+  .arcana-pipeline-phase {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 1rem 0.75rem 1.25rem;
+    background: #faf5ff;
+    border: 1px solid #ede9fe;
+    border-radius: 0.625rem;
+  }
+
+  .arcana-pipeline-phase-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    max-width: 280px;
+    margin: 0 auto 0.75rem;
+  }
+
+  .arcana-pipeline-phase-header h5 {
+    margin: 0;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #7c3aed;
+  }
+
+  .arcana-pipeline-phase-toggle {
+    font-size: 0.6875rem;
+    font-weight: 400;
+    color: #9ca3af;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* Substep: a conditional loop on the previous step (Multi-hop reasoning
+     loops search, Self-correction loops answer). The ↻ glyph on the label
+     signals the loop relationship. Keeps the same width + center axis as
+     the primary steps so the vertical connector stays straight. */
+  .arcana-loop-glyph {
+    display: inline-block;
+    margin-right: 0.25rem;
+    color: #a78bfa;
+    font-weight: 700;
+  }
+
+  .arcana-pipeline-step:has(input:checked) .arcana-loop-glyph {
+    color: #7c3aed;
+  }
+
   /* Ask page sub-tabs: segmented pill control. Distinct from the
      top-level .arcana-tab nav (which uses underlines) so the two
      navigation levels don't visually compete. */
@@ -2457,6 +2519,77 @@ defmodule ArcanaWeb.Assets do
   }
 
   .arcana-query-list li {
+    margin-bottom: 0.25rem;
+  }
+
+  /* Pipeline internals: one block below the answer that shows what each
+     pipeline step produced (rewritten query, gate decision, sub-questions,
+     etc). Renders as a <dl> with each step's label + value on one line. */
+  .arcana-pipeline-internals-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.5rem 1rem;
+    margin: 0;
+    font-size: 0.875rem;
+  }
+
+  .arcana-pipeline-internals-list dt {
+    font-weight: 600;
+    color: #6d28d9;
+    white-space: nowrap;
+  }
+
+  .arcana-pipeline-internals-list dd {
+    margin: 0;
+    color: #374151;
+    min-width: 0;
+  }
+
+  .arcana-pipeline-internals-quote {
+    font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    font-size: 0.8125rem;
+    color: #4b5563;
+    background: #f9fafb;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    display: inline-block;
+  }
+
+  .arcana-pipeline-internals-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .arcana-pipeline-internals-badge.skip {
+    background: #fef3c7;
+    color: #b45309;
+  }
+
+  .arcana-pipeline-internals-badge.retrieve {
+    background: #dbeafe;
+    color: #1d4ed8;
+  }
+
+  .arcana-pipeline-internals-badge.neutral {
+    background: #f3f4f6;
+    color: #6b7280;
+  }
+
+  .arcana-pipeline-internals-reasoning {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.8125rem;
+    color: #6b7280;
+    font-style: italic;
+  }
+
+  .arcana-pipeline-internals-feedback {
+    font-size: 0.8125rem;
+    color: #6b7280;
+    font-style: italic;
     margin-bottom: 0.25rem;
   }
 

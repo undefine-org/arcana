@@ -368,9 +368,12 @@ defmodule ArcanaWeb.AskLiveTest do
       refute has_element?(view, "input[name='use_gate'][checked]")
       refute has_element?(view, "input[name='use_ground'][checked]")
 
-      # "all" should check every step.
+      # Global "all" (the top-level button, not a group-scoped one) should
+      # check every step. Targets the button without a phx-value-group.
       view
-      |> element("button.arcana-pipeline-toggle-link", "all")
+      |> element(
+        "button.arcana-pipeline-toggle-link[phx-value-mode='all']:not([phx-value-group])"
+      )
       |> render_click()
 
       assert has_element?(view, "input[name='use_gate'][checked]")
@@ -378,13 +381,50 @@ defmodule ArcanaWeb.AskLiveTest do
       assert has_element?(view, "input[name='self_correct'][checked]")
       assert has_element?(view, "input[name='use_ground'][checked]")
 
-      # "none" should clear every step.
+      # Global "none" should clear every step.
       view
-      |> element("button.arcana-pipeline-toggle-link", "none")
+      |> element(
+        "button.arcana-pipeline-toggle-link[phx-value-mode='none']:not([phx-value-group])"
+      )
       |> render_click()
 
       refute has_element?(view, "input[name='use_gate'][checked]")
       refute has_element?(view, "input[name='use_ground'][checked]")
+    end
+
+    test "per-group all/none toggle only affects the target phase", %{conn: conn} do
+      # Defends the phx-value-group scoping on set_pipeline_steps.
+      # Clicking "all" in the Query preparation group should flip the
+      # gate/rewrite/expand/decompose boxes and leave retrieval/answer
+      # boxes alone.
+      {:ok, view, _html} = live(conn, "/arcana/ask/pipeline")
+
+      view
+      |> element("button.arcana-pipeline-toggle-link[phx-value-group='query']", "all")
+      |> render_click()
+
+      # Query phase steps: checked.
+      assert has_element?(view, "input[name='use_gate'][checked]")
+      assert has_element?(view, "input[name='use_rewrite'][checked]")
+      assert has_element?(view, "input[name='use_expand'][checked]")
+      assert has_element?(view, "input[name='use_decompose'][checked]")
+
+      # Retrieval + Answer phase steps: still unchecked.
+      refute has_element?(view, "input[name='use_reason'][checked]")
+      refute has_element?(view, "input[name='use_rerank'][checked]")
+      refute has_element?(view, "input[name='self_correct'][checked]")
+      refute has_element?(view, "input[name='use_ground'][checked]")
+
+      # Now flip the Answer phase on: self_correct and use_ground check,
+      # query-phase stays on (leaves other groups untouched).
+      view
+      |> element("button.arcana-pipeline-toggle-link[phx-value-group='answer']", "all")
+      |> render_click()
+
+      assert has_element?(view, "input[name='self_correct'][checked]")
+      assert has_element?(view, "input[name='use_ground'][checked]")
+      assert has_element?(view, "input[name='use_gate'][checked]")
+      refute has_element?(view, "input[name='use_reason'][checked]")
     end
 
     test "switching sub-tabs clears stale ask result and error", %{conn: conn} do
