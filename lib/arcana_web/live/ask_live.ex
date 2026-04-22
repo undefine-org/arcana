@@ -756,9 +756,14 @@ defmodule ArcanaWeb.AskLive do
     # Use the local CrossEncoder reranker for the dashboard: it reorders
     # without filtering, which matches the UI copy ("Cross-encoder
     # rescoring") and avoids the LLM reranker's aggressive threshold that
-    # can drop every chunk on the demo questions.
+    # can drop every chunk on the demo questions. Passing :top_k bypasses
+    # the reranker's default threshold=0.0 filter since cross-encoder
+    # logits can land entirely negative on broad questions.
     if Keyword.get(opts, :use_rerank, false) do
-      Arcana.Pipeline.rerank(ctx, reranker: Arcana.Reranker.CrossEncoder)
+      Arcana.Pipeline.rerank(ctx,
+        reranker: Arcana.Reranker.CrossEncoder,
+        top_k: 30
+      )
     else
       ctx
     end
@@ -789,7 +794,15 @@ defmodule ArcanaWeb.AskLive do
   end
 
   defp maybe_ground(ctx, opts) do
-    if Keyword.get(opts, :use_ground, false), do: Arcana.Pipeline.ground(ctx), else: ctx
+    # Uses the default Hallmark (HHEM) grounder. Since HallmarkServing
+    # now scores each (sentence, chunk) pair individually and takes max
+    # per sentence, the concat-all-chunks truncation problem that broke
+    # Pipeline grounding on 20+ chunks is gone.
+    if Keyword.get(opts, :use_ground, false) do
+      Arcana.Pipeline.ground(ctx)
+    else
+      ctx
+    end
   end
 
   defp build_search_opts(opts, all_collection_names) do
@@ -824,11 +837,21 @@ defmodule ArcanaWeb.AskLive do
       end)
       |> Enum.uniq_by(& &1.id)
 
+    graph_sourced_count =
+      Enum.count(all_chunks, fn c ->
+        sources = Map.get(c, :graph_sources) || []
+        sources != []
+      end)
+
+    rerank_scores = Map.get(ctx, :rerank_scores) || %{}
+
     {:ok,
      %{
        question: question,
        answer: ctx.answer,
        results: all_chunks,
+       retrieved_count: length(all_chunks),
+       graph_sourced_count: graph_sourced_count,
        rewritten_query: ctx.rewritten_query,
        expanded_query: ctx.expanded_query,
        sub_questions: ctx.sub_questions,
@@ -838,6 +861,8 @@ defmodule ArcanaWeb.AskLive do
        queries_tried: ctx.queries_tried,
        correction_count: ctx.correction_count,
        corrections: ctx.corrections,
+       rerank_scores: rerank_scores,
+       rerank_kept: map_size(rerank_scores),
        selected_collections: ctx.collections,
        grounding: ctx.grounding
      }}
@@ -1490,6 +1515,34 @@ defmodule ArcanaWeb.AskLive do
                       </dd>
                   <% end %>
 
+                  <% graph_count = Map.get(@ask_context, :graph_sourced_count) || 0 %>
+                  <% retrieved = Map.get(@ask_context, :retrieved_count) || 0 %>
+                  <%= if graph_count > 0 do %>
+                    <dt>Graph-assisted retrieval</dt>
+                    <dd>
+                      <span class="arcana-pipeline-internals-badge neutral">
+                        <%= graph_count %>/<%= retrieved %> chunks found via entity relationships
+                      </span>
+                    </dd>
+                  <% end %>
+
+                  <% rerank_kept = Map.get(@ask_context, :rerank_kept) || 0 %>
+                  <%= if rerank_kept > 0 do %>
+                    <dt>Reranking</dt>
+                    <dd>
+                      <% scores = Map.get(@ask_context, :rerank_scores) || %{} %>
+                      <% sorted = scores |> Map.values() |> Enum.sort(:desc) %>
+                      <% top = List.first(sorted) %>
+                      <% bottom = List.last(sorted) %>
+                      <span class="arcana-pipeline-internals-badge neutral">
+                        <%= rerank_kept %> chunks reordered
+                        <%= if top && bottom && rerank_kept > 1 do %>
+                          (top score <%= :erlang.float_to_binary(top * 1.0, decimals: 2) %>, bottom <%= :erlang.float_to_binary(bottom * 1.0, decimals: 2) %>)
+                        <% end %>
+                      </span>
+                    </dd>
+                  <% end %>
+
                   <%= case Map.get(@ask_context, :correction_count) do %>
                     <% nil -> %>
                     <% 0 -> %>
@@ -1726,6 +1779,8 @@ defmodule ArcanaWeb.AskLive do
       not is_nil(Map.get(ctx, :skip_retrieval)) or
       not is_nil(Map.get(ctx, :reason_iterations)) or
       (Map.get(ctx, :correction_count) || 0) > 0 or
+      (Map.get(ctx, :rerank_kept) || 0) > 0 or
+      (Map.get(ctx, :graph_sourced_count) || 0) > 0 or
       match?([_ | _], Map.get(ctx, :sub_questions))
   end
 
