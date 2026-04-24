@@ -303,6 +303,8 @@ defmodule ArcanaWeb.Assets do
   .arcana-stat-value {
     font-size: 1.5rem;
     font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
   }
 
   .arcana-stat-label {

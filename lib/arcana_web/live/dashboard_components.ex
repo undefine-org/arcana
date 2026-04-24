@@ -18,25 +18,25 @@ defmodule ArcanaWeb.DashboardComponents do
       <div class="arcana-stats">
         <div class="arcana-brand">Arcana</div>
         <div class="arcana-stat">
-          <div class="arcana-stat-value"><%= @stats.documents %></div>
+          <div class="arcana-stat-value"><%= format_number(@stats.documents) %></div>
           <div class="arcana-stat-label">Documents</div>
         </div>
         <div class="arcana-stat">
-          <div class="arcana-stat-value"><%= @stats.chunks %></div>
+          <div class="arcana-stat-value"><%= format_number(@stats.chunks) %></div>
           <div class="arcana-stat-label">Chunks</div>
         </div>
         <%= if @stats[:entities] do %>
           <div class="arcana-stat-divider"></div>
           <div class="arcana-stat">
-            <div class="arcana-stat-value"><%= @stats.entities %></div>
+            <div class="arcana-stat-value"><%= format_number(@stats.entities) %></div>
             <div class="arcana-stat-label">Entities</div>
           </div>
           <div class="arcana-stat">
-            <div class="arcana-stat-value"><%= @stats.relationships %></div>
+            <div class="arcana-stat-value"><%= format_number(@stats.relationships) %></div>
             <div class="arcana-stat-label">Relationships</div>
           </div>
           <div class="arcana-stat">
-            <div class="arcana-stat-value"><%= @stats.communities %></div>
+            <div class="arcana-stat-value"><%= format_number(@stats.communities) %></div>
             <div class="arcana-stat-label">Communities</div>
           </div>
         <% end %>
@@ -129,6 +129,12 @@ defmodule ArcanaWeb.DashboardComponents do
   def format_score(nil), do: "-"
   def format_score(value) when is_float(value), do: "#{Float.round(value, 1)}/10"
   def format_score(value) when is_integer(value), do: "#{value}/10"
+
+  def format_number(n) when is_integer(n) do
+    n |> Integer.to_string() |> String.replace(~r/\B(?=(\d{3})+(?!\d))/, ",")
+  end
+
+  def format_number(_), do: "-"
 
   def error_to_string(:too_large), do: "File too large (max 10MB)"
   def error_to_string(:too_many_files), do: "Too many files (max 10)"
