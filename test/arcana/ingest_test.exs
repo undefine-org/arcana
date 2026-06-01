@@ -1,3 +1,26 @@
+defmodule Arcana.IngestTest.MetadataChunker do
+  @moduledoc false
+  # Emits one chunk per line, each carrying custom metadata. Exercises the
+  # Chunker contract: "Additional keys may be included and will be passed
+  # through to storage."
+  @behaviour Arcana.Chunker
+
+  @impl true
+  def chunk(text, _opts) do
+    text
+    |> String.split("\n", trim: true)
+    |> Enum.with_index()
+    |> Enum.map(fn {line, idx} ->
+      %{
+        text: line,
+        chunk_index: idx,
+        token_count: max(1, div(String.length(line), 4)),
+        metadata: %{"block_id" => "block-#{idx}", "source" => "metadata-chunker"}
+      }
+    end)
+  end
+end
+
 defmodule Arcana.IngestTest do
   use Arcana.DataCase, async: true
 
@@ -86,6 +109,32 @@ defmodule Arcana.IngestTest do
       fake_id = Ecto.UUID.generate()
 
       assert {:error, :not_found} = Arcana.delete(fake_id, repo: Repo)
+    end
+  end
+
+  describe "ingest/2 chunk metadata" do
+    test "persists per-chunk metadata returned by the chunker" do
+      text = "alpha line\nbeta line\ngamma line"
+
+      {:ok, document} =
+        Arcana.ingest(text,
+          repo: Repo,
+          chunker: Arcana.IngestTest.MetadataChunker
+        )
+
+      chunks =
+        Arcana.Chunk
+        |> Repo.all()
+        |> Enum.filter(&(&1.document_id == document.id))
+        |> Enum.sort_by(& &1.chunk_index)
+
+      assert length(chunks) == 3
+
+      assert Enum.map(chunks, & &1.metadata) == [
+               %{"block_id" => "block-0", "source" => "metadata-chunker"},
+               %{"block_id" => "block-1", "source" => "metadata-chunker"},
+               %{"block_id" => "block-2", "source" => "metadata-chunker"}
+             ]
     end
   end
 end

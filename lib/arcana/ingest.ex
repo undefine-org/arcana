@@ -139,6 +139,7 @@ defmodule Arcana.Ingest do
             embedding: embedding,
             chunk_index: chunk.chunk_index,
             token_count: chunk.token_count,
+            metadata: Map.get(chunk, :metadata, %{}),
             document_id: document.id
           })
           |> repo.insert!()
