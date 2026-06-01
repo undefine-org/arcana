@@ -264,4 +264,66 @@ defmodule Arcana.SearchTest do
       assert length(results) <= 2
     end
   end
+
+  describe "search/2 preserves custom chunk metadata" do
+    # Insert a chunk directly (with stored metadata) to isolate the
+    # search-result shaping from the ingest path. The vector store merges a
+    # chunk's stored metadata with synthetic fields (text/chunk_index/...);
+    # the search layer must expose the chunk's own metadata under :metadata
+    # while NOT leaking the synthetic keys.
+    setup do
+      {:ok, collection} = Arcana.Collection.get_or_create("meta-keep", Repo)
+
+      {:ok, document} =
+        %Arcana.Document{}
+        |> Arcana.Document.changeset(%{
+          content: "doc",
+          status: :completed,
+          collection_id: collection.id
+        })
+        |> Repo.insert()
+
+      {:ok, embedding} =
+        Arcana.Embedder.embed(
+          Arcana.Config.embedder(),
+          "Quoxar Tarndiv optimizer level nine",
+          intent: :document
+        )
+
+      {:ok, _chunk} =
+        %Arcana.Chunk{}
+        |> Arcana.Chunk.changeset(%{
+          text: "Quoxar Tarndiv optimizer level nine",
+          embedding: embedding,
+          chunk_index: 0,
+          token_count: 6,
+          metadata: %{"block_id" => "blk-1", "breadcrumbs" => "Docs / Guide"},
+          document_id: document.id
+        })
+        |> Repo.insert()
+
+      :ok
+    end
+
+    for mode <- [:vector, :keyword, :hybrid] do
+      @mode mode
+      test "#{@mode} mode returns custom metadata under :metadata" do
+        {:ok, results} =
+          Arcana.search("Tarndiv optimizer",
+            repo: Repo,
+            collections: ["meta-keep"],
+            mode: @mode
+          )
+
+        refute Enum.empty?(results)
+        hit = hd(results)
+        assert hit.metadata["block_id"] == "blk-1"
+        assert hit.metadata["breadcrumbs"] == "Docs / Guide"
+        # Synthetic fields must NOT leak into custom metadata.
+        refute Map.has_key?(hit.metadata, :text)
+        refute Map.has_key?(hit.metadata, :document_id)
+        refute Map.has_key?(hit.metadata, :vector_score)
+      end
+    end
+  end
 end

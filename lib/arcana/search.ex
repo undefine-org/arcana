@@ -410,7 +410,8 @@ defmodule Arcana.Search do
              chunk_index: metadata[:chunk_index],
              score: result.score,
              vector_score: metadata[:vector_score],
-             keyword_score: metadata[:keyword_score]
+             keyword_score: metadata[:keyword_score],
+             metadata: custom_metadata(metadata)
            }
          end)}
 
@@ -441,10 +442,28 @@ defmodule Arcana.Search do
         text: metadata[:text] || "",
         document_id: metadata[:document_id],
         chunk_index: metadata[:chunk_index],
-        score: result.score
+        score: result.score,
+        metadata: custom_metadata(metadata)
       }
     end)
   end
+
+  # The vector store merges the chunk's stored metadata with synthetic fields
+  # (text/chunk_index/document_id/scores) under one map. Strip those synthetic
+  # keys to recover the chunk's own metadata so result shapes expose it without
+  # leaking internals. Custom keys (e.g. from a chunker) are preserved as-is.
+  @synthetic_metadata_keys [
+    :text,
+    :chunk_index,
+    :document_id,
+    :vector_score,
+    :keyword_score
+  ]
+  defp custom_metadata(metadata) when is_map(metadata) do
+    Map.drop(metadata, @synthetic_metadata_keys)
+  end
+
+  defp custom_metadata(_), do: %{}
 
   # Build vector_store opts by merging user-provided opts (so backend-specific
   # tuning flows through) with the search-specific fields from params.
