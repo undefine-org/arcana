@@ -457,7 +457,15 @@ defmodule Arcana.Search do
     :chunk_index,
     :document_id,
     :vector_score,
-    :keyword_score
+    :keyword_score,
+    # Drop the string forms too: a custom vector-store backend (or a
+    # serialize/deserialize round-trip) may surface these synthetic keys as
+    # strings rather than atoms.
+    "text",
+    "chunk_index",
+    "document_id",
+    "vector_score",
+    "keyword_score"
   ]
   defp custom_metadata(metadata) when is_map(metadata) do
     Map.drop(metadata, @synthetic_metadata_keys)
