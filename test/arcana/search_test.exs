@@ -319,10 +319,14 @@ defmodule Arcana.SearchTest do
         hit = hd(results)
         assert hit.metadata["block_id"] == "blk-1"
         assert hit.metadata["breadcrumbs"] == "Docs / Guide"
-        # Synthetic fields must NOT leak into custom metadata.
+        # Synthetic fields must NOT leak into custom metadata, in either atom
+        # or string form (backends/serialization may surface either).
         refute Map.has_key?(hit.metadata, :text)
+        refute Map.has_key?(hit.metadata, "text")
         refute Map.has_key?(hit.metadata, :document_id)
+        refute Map.has_key?(hit.metadata, "document_id")
         refute Map.has_key?(hit.metadata, :vector_score)
+        refute Map.has_key?(hit.metadata, "vector_score")
       end
     end
   end
