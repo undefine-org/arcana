@@ -139,7 +139,7 @@ defmodule Arcana.Ingest do
             embedding: embedding,
             chunk_index: chunk.chunk_index,
             token_count: chunk.token_count,
-            metadata: Map.get(chunk, :metadata, %{}),
+            metadata: chunk_metadata(chunk),
             document_id: document.id
           })
           |> repo.insert!()
@@ -153,6 +153,19 @@ defmodule Arcana.Ingest do
 
         {:halt, {:error, {:embedding_failed, reason}}}
     end
+  end
+
+  # The Chunker contract states a chunk map's additional keys "will be passed
+  # through to storage". The schema persists them in the :metadata jsonb column,
+  # so fold every non-standard top-level key into metadata, with an explicit
+  # :metadata map taking precedence on key collisions.
+  @standard_chunk_keys [:text, :chunk_index, :token_count, :embedding, :metadata]
+  defp chunk_metadata(chunk) do
+    explicit = Map.get(chunk, :metadata) || %{}
+
+    chunk
+    |> Map.drop(@standard_chunk_keys)
+    |> Map.merge(explicit)
   end
 
   defp ingest_with_file_attrs(text, opts) do
