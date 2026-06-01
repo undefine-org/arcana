@@ -21,6 +21,28 @@ defmodule Arcana.IngestTest.MetadataChunker do
   end
 end
 
+defmodule Arcana.IngestTest.PassthroughChunker do
+  @moduledoc false
+  # Returns extra top-level keys alongside the standard ones, plus an explicit
+  # :metadata map. Per the Chunker contract, the extra top-level keys must be
+  # passed through to storage; explicit :metadata wins on key collisions.
+  @behaviour Arcana.Chunker
+
+  @impl true
+  def chunk(text, _opts) do
+    [
+      %{
+        text: text,
+        chunk_index: 0,
+        token_count: max(1, div(String.length(text), 4)),
+        page_number: 5,
+        section: "intro",
+        metadata: %{"section" => "overridden", "extra" => true}
+      }
+    ]
+  end
+end
+
 defmodule Arcana.IngestTest do
   use Arcana.DataCase, async: true
 
@@ -135,6 +157,28 @@ defmodule Arcana.IngestTest do
                %{"block_id" => "block-1", "source" => "metadata-chunker"},
                %{"block_id" => "block-2", "source" => "metadata-chunker"}
              ]
+    end
+
+    test "folds extra top-level chunk keys into metadata (Chunker contract)" do
+      {:ok, document} =
+        Arcana.ingest("passthrough content",
+          repo: Repo,
+          chunker: Arcana.IngestTest.PassthroughChunker
+        )
+
+      [chunk] =
+        Arcana.Chunk
+        |> Repo.all()
+        |> Enum.filter(&(&1.document_id == document.id))
+
+      # Extra top-level keys are passed through to storage; the explicit
+      # :metadata map wins on collisions (section), and standard chunk keys
+      # (text/chunk_index/token_count/embedding) are not folded in.
+      assert chunk.metadata == %{
+               "page_number" => 5,
+               "section" => "overridden",
+               "extra" => true
+             }
     end
   end
 end
